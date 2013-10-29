@@ -1,0 +1,102 @@
+#lang racket
+
+;; Parameters
+
+(define mode (make-parameter "http"))
+(define host (make-parameter "localhost"))
+(define port (make-parameter 12001))
+
+;; Widgets
+
+(struct widget (name serial raw) #:prefab #:mutable)
+
+; (or widget? symbol? string? bytes?) -> string?
+; Always return a string
+(define (ensure-wname w)
+  (cond [(widget? w) (widget-name w)]
+        [(symbol? w) (symbol->string w)]
+        [(string? w) w]
+        [(bytes? w) (bytes->string/utf-8 w)]
+        [else (error 'ensure-wname "Cannot infer widget name from ~a." w)]))
+
+
+;; HTTP stuff
+
+(require net/http-client)
+
+; wname? -> string?
+; Example: "SomeValue" -> "http://localhost:12001/widgetStore/SomeValue"
+(define (widget-store-url wname)
+  (format "~a://~a:~a/WidgetStore/~a"
+          (mode) ; parameter
+          (host) ; parameter
+          (port) ; parameter
+          (ensure-wname wname)))
+
+
+(define (widget-store-request uri
+                               #:method  [method #"GET"]
+                               #:headers [headers '()]
+                               #:data    [data #f])
+  (define-values (response-status response-headers in)
+    (http-sendrecv (host) uri
+                   #:port (port)
+                   #:version #"1.1"
+                   #:method method
+                   #:headers headers
+                   #:data data))
+  (values (parse-http-status response-status)
+          (parse-http-headers response-headers)
+          (port->string in)))
+
+(define (parse-http-status status)
+  (define m (regexp-match #px"^HTTP/\\d.\\d (\\d+) (.*)$" status))
+  (if m
+      (list (string->number (bytes->string/utf-8 (cadr m))) (caddr m))
+      (error 'parse-http-status "Unknown HTTP response: ~a." status)))
+
+(define (parse-http-headers headers)
+  (for/fold ([parsed (make-immutable-hasheq)])
+    ([header (in-list headers)])
+    (define-values (key value) (parse-http-header header))
+    (if (hash-ref parsed key #f)
+        (hash-set parsed key (cons value (hash-ref parsed key)))
+        (hash-set parsed key (list value)))))
+
+(define (parse-http-header header)
+  (define m (regexp-match #px"^([^:]+):(.*)$" (ensure-string header)))
+  (if m
+      (values (string->symbol (string-trim (cadr m)))
+              (string-trim (caddr m)))
+      (error 'parse-http-header "Unable to parse header: '~a'" header)))
+
+(define (sole-header-value headers key [default #f])
+  (define values (hash-ref headers key #f))
+  (if values
+      (car values)
+      default))
+
+(define (ensure-string x)
+  (cond [(string? x) x]
+        [(bytes? x) (bytes->string/utf-8 x)]
+        [symbol? x] (symbol->string x)))
+
+
+;; Get and parse widget
+
+(require sxml)
+
+(define (get-raw-widget wname)
+  (define-values (status headers data)
+    (widget-store-request (widget-store-url wname)))
+  (if (not (= 404 (car status)))
+      (values data (string->number (sole-header-value headers 'Serial "0")))
+      (values #f 0)))
+               
+(define (get-widget wname)
+  (define-values (raw serial) (get-raw-widget wname))
+  (and raw (widget wname serial (ssax:xml->sxml (open-input-string raw) '()))))
+
+(define (widget-exists? wname)
+  (define-values (raw serial) (get-raw-widget wname))
+  (not (not raw)))
