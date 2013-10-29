@@ -35,9 +35,9 @@
 
 
 (define (widget-store-request uri
-                               #:method  [method #"GET"]
-                               #:headers [headers '()]
-                               #:data    [data #f])
+                              #:method  [method #"GET"]
+                              #:headers [headers '()]
+                              #:data    [data #f])
   (define-values (response-status response-headers in)
     (http-sendrecv (host) uri
                    #:port (port)
@@ -92,7 +92,7 @@
   (if (not (= 404 (car status)))
       (values data (string->number (sole-header-value headers 'Serial "0")))
       (values #f 0)))
-               
+
 (define (get-widget wname)
   (define-values (raw serial) (get-raw-widget wname))
   (and raw (widget wname serial (ssax:xml->sxml (open-input-string raw) '()))))
@@ -100,3 +100,64 @@
 (define (widget-exists? wname)
   (define-values (raw serial) (get-raw-widget wname))
   (not (not raw)))
+
+
+;; SXML related
+
+(define (sxml-element w)
+  (car (sxml:content (widget-raw w))))
+
+(define (widget-property w property)
+  (sxml:attr (sxml-element w) property))
+
+(define (set-widget-property w property value)
+  (struct-copy widget w
+               [raw `(*TOP* 
+                      ,(sxml:set-attr 
+                        (sxml-element w) 
+                        (list property value)))]))
+
+(define (set-widget-property! w property value)
+  (set-widget-raw! w
+                   `(*TOP* 
+                     ,(sxml:set-attr 
+                       (sxml-element w) 
+                       (list property value)))))
+
+(define (set-widget-properties w properties)
+  (for/fold [(widget w)]
+    ([property (in-list properties)])
+    (match-define (list key value) property)
+    (set-widget-property widget key value)))
+
+(define (set-widget-properties! w properties)
+  (for ([property (in-list properties)])
+    (match-define (list key value) property)
+    (set-widget-property! w key value)))
+
+
+;; Put widget
+
+(define (put-raw-widget wname serial html)
+  (define-values (status _ __)
+    (widget-store-request (widget-store-url wname)
+                          #:method 'PUT
+                          #:headers (list (format "Serial : ~a" (add1 serial)))
+                          #:data html))
+  status)
+
+(define (put-widget w)
+  (put-raw-widget 
+   (widget-name w) 
+   (widget-serial w)
+   (srl:sxml->html (widget-raw w))))
+
+
+(define-syntax (with-widget stx)
+  (syntax-case stx ()
+    [(_ (var wname) body ...)
+     #'(let ([var (get-widget wname)])
+         (when var
+           body ...
+           (put-widget var)
+           (void)))]))
