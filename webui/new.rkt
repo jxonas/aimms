@@ -1,5 +1,10 @@
 #lang racket
 
+
+;; Testing setup
+
+(module+ test (require rackunit))
+
 ;; Parameters
 
 (define mode (make-parameter "http"))
@@ -13,11 +18,18 @@
 ; (or widget? symbol? string? bytes?) -> string?
 ; Always return a string
 (define (ensure-wname w)
-  (cond [(widget? w) (widget-name w)]
+  (cond [(widget? w) (ensure-wname (widget-name w))]
         [(symbol? w) (symbol->string w)]
         [(string? w) w]
         [(bytes? w) (bytes->string/utf-8 w)]
         [else (error 'ensure-wname "Cannot infer widget name from ~a." w)]))
+
+(module+ test
+  (check-equal? "widget" (ensure-wname "widget"))
+  (check-equal? "tehdiw" (ensure-wname 'tehdiw))
+  (check-equal? "wgname" (ensure-wname (widget "wgname" #f #f)))
+  (check-exn exn:fail? (lambda () (ensure-wname 12)))
+  (check-exn exn:fail? (lambda () (ensure-wname (widget 42 #f #f)))))
 
 
 ;; HTTP stuff
@@ -32,6 +44,13 @@
           (host) ; parameter
           (port) ; parameter
           (ensure-wname wname)))
+
+(module+ test
+  (parameterize ([mode "xyzw"]
+                 [host "distanthost"]
+                 [port 1234])
+    (check-equal? "xyzw://distanthost:1234/WidgetStore/Frubas"
+                  (widget-store-url "Frubas"))))
 
 
 (define (widget-store-request uri
@@ -49,11 +68,18 @@
           (parse-http-headers response-headers)
           (port->string in)))
 
+;; bytes -> (list number string)
 (define (parse-http-status status)
   (define m (regexp-match #px"^HTTP/\\d.\\d (\\d+) (.*)$" status))
   (if m
-      (list (string->number (bytes->string/utf-8 (cadr m))) (caddr m))
+      (list (string->number (bytes->string/utf-8 (cadr m))) 
+            (string-trim (bytes->string/utf-8 (caddr m))))
       (error 'parse-http-status "Unknown HTTP response: ~a." status)))
+
+(module+ test
+  (check-equal? (parse-http-status #"HTTP/1.1 404 Not Found.") '(404 "Not Found."))
+  (check-equal? (parse-http-status #"HTTP/1.1 123 (Okidoki) ") '(123 "(Okidoki)")))
+
 
 (define (parse-http-headers headers)
   (for/fold ([parsed (make-immutable-hasheq)])
@@ -76,6 +102,7 @@
       (car values)
       default))
 
+;; (or string bytes symbol) -> string/utf-8
 (define (ensure-string x)
   (cond [(string? x) x]
         [(bytes? x) (bytes->string/utf-8 x)]
