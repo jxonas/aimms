@@ -1,5 +1,6 @@
 #lang racket
 
+(provide (all-defined-out))
 
 ;; Testing setup
 
@@ -128,20 +129,34 @@
   (define-values (raw serial) (get-raw-widget wname))
   (not (not raw)))
 
+(define (stringable? x)
+  (or (string? x) (bytes? x) (symbol? x)))
+
+
+(define (ensure-widget w)
+  (cond 
+    [(widget? w) w]
+    [(stringable? w) (get-widget (ensure-string w))]
+    [else (error 'ensure-widget "Can't get widget from '~a'." w)]))
 
 ;; SXML related
+
 
 (define (sxml-element w)
   (car (sxml:content (widget-raw w))))
 
+(define (widget-properties w)
+  (sxml:attr-list (sxml-element (ensure-widget w))))
+
 (define (widget-property w property)
-  (sxml:attr (sxml-element w) property))
+  (sxml:attr (sxml-element (ensure-widget w)) property))
 
 (define (set-widget-property w property value)
-  (struct-copy widget w
+  (define ww (ensure-widget w))
+  (struct-copy widget ww
                [raw `(*TOP* 
                       ,(sxml:set-attr 
-                        (sxml-element w) 
+                        (sxml-element ww) 
                         (list property value)))]))
 
 (define (set-widget-property! w property value)
@@ -152,7 +167,7 @@
                        (list property value)))))
 
 (define (set-widget-properties w properties)
-  (for/fold [(widget w)]
+  (for/fold [(widget (ensure-widget w))]
     ([property (in-list properties)])
     (match-define (list key value) property)
     (set-widget-property widget key value)))
